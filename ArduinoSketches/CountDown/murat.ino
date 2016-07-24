@@ -50,44 +50,27 @@
 #define RELAIS_PIN 3
 
 #define scrollSpeed 15
-#define scrollDelay 600
+#define scrollDelay 500
 #define dimSpeed 40
 
-
-
-byte myFont[] = {
-  0x78,0xCC,0xDC,0xFC,0xEC,0xCC,0x78,0x00,  // 0x30 0
-  0x30,0xF0,0x30,0x30,0x30,0x30,0xFC,0x00,  // 0x31 1
-  0x78,0xCC,0x0C,0x38,0x60,0xCC,0xFC,0x00,  // 0x32 2
-  0x78,0xCC,0x0C,0x38,0x0C,0xCC,0x78,0x00,  // 0x33 3
-  0x1C,0x3C,0x6C,0xCC,0xFE,0x0C,0x0C,0x00,  // 0x34 4
-  0xFC,0xC0,0xF8,0x0C,0x0C,0xCC,0x78,0x00,  // 0x35 5
-  0x38,0x60,0xC0,0xF8,0xCC,0xCC,0x78,0x00,  // 0x36 6
-  0xFC,0xCC,0x0C,0x18,0x30,0x60,0x60,0x00,  // 0x37 7
-  0x78,0xCC,0xCC,0x78,0xCC,0xCC,0x78,0x00,  // 0x38 8
-  0x78,0xCC,0xCC,0x7C,0x0C,0x18,0x70,0x00,  // 0x39 9
-  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,  // 0x00 
+byte myFont[11][8] = {
+  {0x78,0xCC,0xDC,0xFC,0xEC,0xCC,0x78,0x00},	// 0
+  {0x30,0xF0,0x30,0x30,0x30,0x30,0xFC,0x00},	// 1
+  {0x78,0xCC,0x0C,0x38,0x60,0xCC,0xFC,0x00},	// 2
+  {0x78,0xCC,0x0C,0x38,0x0C,0xCC,0x78,0x00},	// 3
+  {0x1C,0x3C,0x6C,0xCC,0xFE,0x0C,0x0C,0x00},	// 4
+  {0xFC,0xC0,0xF8,0x0C,0x0C,0xCC,0x78,0x00},	// 5
+  {0x38,0x60,0xC0,0xF8,0xCC,0xCC,0x78,0x00},	// 6
+  {0xFC,0xCC,0x0C,0x18,0x30,0x60,0x60,0x00},	// 7
+  {0x78,0xCC,0xCC,0x78,0xCC,0xCC,0x78,0x00},	// 8
+  {0x78,0xCC,0xCC,0x7C,0x0C,0x18,0x70,0x00},	// 9
+  {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}	//  
 };
 
-
-unsigned long currentMillis   = 0; // time since last reset in ms
-
-// For Scroll Delay
-unsigned long previousMillis1 = 0;
-
-// Button Debouncing
-unsigned long previousMillis2 = 0;
-int buttonDelay      = 200;
-
-byte pressedButton = 0;
 byte brightnes = 15;
-byte oldBrightnes = 15;
-
-enum e_Mode {eSetup, eSetBrightness, eTextScroller};
-int eMode = eTextScroller;
+byte oldBrightnes = 0;
 
 byte frameBuffer[6][8] = {0};
-
 byte ledmatrix[32];
 
 
@@ -98,21 +81,41 @@ void setup()
   pinMode(RELAIS_PIN, OUTPUT);
   digitalWrite(RELAIS_PIN, HIGH);
 
-
   HT1632begin();
 }
 
 void loop()
 {
-  byte counter = 6;
+  // Start des Countdowns setzen
+  byte counter = 3;
   
+  // Zuvor eingestellte helligkeit merken und helligkeit dann auf minimum setzen
+  oldBrightnes = brightnes;
+  sendcommand(HT1632_PWM_CONTROL | 0);
+
+  // Erste zahl in den FrameBuffer schreiben und dann 3 schieben, damit es schön in der Mitte ist
+  loadDigitToFrameBuffer(2, counter);
+  for (byte i = 0; i<3; i++)
+  {
+    shiftFrameBuffer();
+  }
+  loadFrameBufferToMatrix();
+
+  // Zahl einblenden
+  for(brightnes = 0; oldBrightnes >= brightnes; brightnes++)
+  {
+    sendcommand(HT1632_PWM_CONTROL | brightnes);
+    delay(dimSpeed);
+  }
+  
+  // Runter zählen bis 0 und die Zahlen dabei immer schön durchschieben
   while(counter)
   {
     counter--;
     
     loadDigitToFrameBuffer(5, counter);
     loadFrameBufferToMatrix();
-    for (byte i = 0; i<27; i++)
+    for (byte i = 0; i<27; i++) // 27 schieben weils dann schön in die Mitte passt
     {
       shiftFrameBuffer();
       loadFrameBufferToMatrix();
@@ -121,24 +124,29 @@ void loop()
     delay(scrollDelay);
   }
   
-  
+  // Helligkeit merken...
   oldBrightnes = brightnes;
+  // ...und die 0 langsam ausblenden
   while(brightnes)
   {
     brightnes--;
     sendcommand(HT1632_PWM_CONTROL | brightnes);
     delay(dimSpeed);
   }
+  // Nach dem ausblenden Matrix löschen //
   clearFrameBuffer();
   loadFrameBufferToMatrix();
-
+  
+  // und alte Helligkeit wieder herstellen
   brightnes = oldBrightnes;
   sendcommand(HT1632_PWM_CONTROL | brightnes);
 
+  // Relais für eine Sekunde anziehen lassen
   digitalWrite(RELAIS_PIN, LOW);
   delay(1000);
   digitalWrite(RELAIS_PIN, HIGH);
 
+  // Warten bis zum nächsten Reset
   while(1);  
 }
 
@@ -210,13 +218,16 @@ void writedata(uint16_t d, uint8_t bits)
 void loadDigitToFrameBuffer(byte digit, byte character)
 // This function loads a single character into the selected framebuffer digit
 {
+//  character = character*8;
+  
   for (byte row=0; row<8; row++)
   {
-    frameBuffer[digit][row] = myFont[(character*8)+row];
+    frameBuffer[digit][row] = myFont[character][row];
   }
 }
 
-void HT1632_setBrightness(uint8_t pwm) {
+void HT1632_setBrightness(uint8_t pwm)
+{
   if (pwm > 15) pwm = 15;
   sendcommand(HT1632_PWM_CONTROL | pwm);
 }
@@ -233,19 +244,12 @@ void loadFrameBufferToMatrix(void)
   writeScreen();
 }
 
-byte shiftFrameBuffer() {return shiftFrameBuffer(0);} // 0 default left shift
-byte shiftFrameBuffer(byte dir)
+byte shiftFrameBuffer()
 {
-  static byte shiftCounter = 1;
-  
   for (byte digit = 0; digit <= (sizeof(frameBuffer)/8)-1 ; digit++) // Cycle through the digits of the frame buffer
   {
     for (byte rowCounter = 0; rowCounter <= 7; rowCounter++)
     {
-      // roll the 8bits...
-      // The information how to roll is from http://arduino.cc/forum/index.php?topic=124188.0 
-      // rowBuffer[rowCounter] = ((rowBuffer[rowCounter] & 0x80)?0x01:0x00) | (rowBuffer[rowCounter] << 1);
-      
       if (digit == 0) // If the first Digit just shift out the MSB
       {
         frameBuffer[digit][rowCounter] = frameBuffer[digit][rowCounter] << 1;
@@ -261,16 +265,11 @@ byte shiftFrameBuffer(byte dir)
       }
     }    
   }
-  shiftCounter++;
-  if (shiftCounter == 9)
-    shiftCounter = 1;
-  return shiftCounter;
 }
 
 void clearFrameBuffer()
 // This Function clears the frame buffer
 {
-  //Serial.println(sizeof(frameBuffer)/8);
   char fbSize = sizeof(frameBuffer)/8;
   
   for (char i = 0; i<fbSize; i++)
